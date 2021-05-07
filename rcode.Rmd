@@ -1,0 +1,304 @@
+---
+title: "410 final project"
+author: "James Li"
+date: "2021/5/5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preparation
+
+```{r, include=FALSE}
+
+library(readr)
+audi <- read_csv("data/audi.csv", col_types = cols(year=col_character()))
+audi[, "brand"] <- "audi"
+
+
+bmw <- read_csv("data/bmw.csv", col_types = cols(year=col_character()))
+bmw[, "brand"] <- "bmw"
+
+
+ford <- read_csv("data/ford.csv", col_types = cols(year=col_character()))
+ford[, "brand"] <- "ford"
+
+
+hyundi <- read_csv("data/hyundi.csv", col_types = cols(year=col_character()))
+hyundi[, "brand"] <- "hyundi"
+
+
+merc <- read_csv("data/merc.csv", col_types = cols(year=col_character()))
+merc[, "brand"] <- "merc"
+
+
+skoda <- read_csv("data/skoda.csv", col_types = cols(year=col_character()))
+skoda[, "brand"] <- "skoda"
+
+
+toyota <- read_csv("data/toyota.csv", col_types = cols(year=col_character()))
+toyota[, "brand"] <- "toyota"
+
+
+vauxhall <- read_csv("data/vauxhall.csv", col_types = cols(year=col_character()))
+vauxhall[, "brand"] <- "vauxhall"
+
+
+vw <- read_csv("data/vw.csv", col_types = cols(year=col_character()))
+vw[, "brand"] <- "vw"
+
+## split into training and testing
+test_size <- floor(nrow(audi)*0.25)
+ind <- sample(sample(nrow(audi), test_size))
+audi_test <- audi[ind, ]
+audi_train <- audi[-ind, ]
+
+test_size <- floor(nrow(ford)*0.25)
+ind <- sample(sample(nrow(ford), test_size))
+ford_test <- ford[ind, ]
+ford_train <- ford[-ind, ]
+
+test_size <- floor(nrow(bmw)*0.25)
+ind <- sample(sample(nrow(bmw), test_size))
+bmw_test <- bmw[ind, ]
+bmw_train <- bmw[-ind, ]
+
+test_size <- floor(nrow(hyundi)*0.25)
+ind <- sample(sample(nrow(hyundi), test_size))
+hyundi_test <- hyundi[ind, ]
+hyundi_train <- hyundi[-ind, ]
+
+test_size <- floor(nrow(merc)*0.25)
+ind <- sample(sample(nrow(merc), test_size))
+merc_test <- merc[ind, ]
+merc_train <- merc[-ind, ]
+
+test_size <- floor(nrow(skoda)*0.25)
+ind <- sample(sample(nrow(skoda), test_size))
+skoda_test <- skoda[ind, ]
+skoda_train <- skoda[-ind, ]
+
+test_size <- floor(nrow(toyota)*0.25)
+ind <- sample(sample(nrow(toyota), test_size))
+toyota_test <- toyota[ind, ]
+toyota_train <- toyota[-ind, ]
+
+test_size <- floor(nrow(vauxhall)*0.25)
+ind <- sample(sample(nrow(vauxhall), test_size))
+vauxhall_test <- vauxhall[ind, ]
+vauxhall_train <- vauxhall[-ind, ]
+
+test_size <- floor(nrow(vw)*0.25)
+ind <- sample(sample(nrow(vw), test_size))
+vw_test <- vw[ind, ]
+vw_train <- vw[-ind, ]
+
+all_data <- do.call("rbind", list(audi, bmw, ford, hyundi, merc, skoda, toyota, vauxhall, vw))
+
+```
+
+# Exploratory Analysis
+
+```{r}
+unique(unlist(all_data[, "brand"]))
+unique(unlist(all_data[, "fuelType"]))
+unique(unlist(all_data[, "transmission"]))
+unique(unlist(all_data[, "engineSize"]))
+
+## wrong data point: year 2060
+unique(unlist(all_data[, "year"]))
+```
+
+
+# Data Analysis
+```{r}
+data <-  do.call("rbind", list(audi_train, bmw_train, ford_train, hyundi_train, merc_train, skoda_train, toyota_train, vauxhall_train, vw_train))
+data <- data[which(data$year!="2060"),]
+
+## First try
+fit <- lm(price~., data=data)
+plot(fit)
+## notice the heavy tail in the qq-plot and the pattern in the scale-location plot
+
+
+## a large number of models
+length(unique(unlist(all_data[, "model"])))
+```
+
+# Apply log transformation
+```{r}
+fit_log <- lm(log(price)~., data=data)
+plot(fit_log)
+```
+
+# Square-root transformation?
+```{r}
+fit_sqrt <- lm(sqrt(price)~., data=data)
+plot(fit_sqrt)
+## the qq-plot and the scale-location plot are not as good.
+```
+
+# Aggressively reducing model - ignore all model info
+```{r}
+fit_reduced <- lm(log(price)~year+transmission+mileage+fuelType+tax+mpg+engineSize+brand, data=data)
+anova(fit_log, fit_reduced)
+## Very large increase in RSS, failed!
+```
+
+# Drop brand?
+```{r}
+fit_reduced_brand <- lm(log(price)~model+year+transmission+mileage+fuelType+tax+mpg+engineSize, data=data)
+anova(fit_log, fit_reduced_brand)
+```
+
+# modify data
+```{r}
+data_b <- subset(data, select=-c(brand))
+fit_log <- lm(log(price)~., data=data_b)
+```
+
+## Lasso regression
+```{r}
+library(glmnet)
+
+X <- model.matrix(log(price)~.-1, data_b)
+y = log(data_b$price)
+lambdas <- seq(100, 0.001, by = -0.1)
+fit_lasso.cv = cv.glmnet(X, y, alpha=1, lambda = lambdas)
+
+
+## check selected coefficients
+vars <- as.matrix(coef(fit_lasso.cv, fit_lasso.cv$lambda.min))
+non_zero <- as.matrix(vars[which(vars[, 1]!=0), ])
+dim(non_zero)  # 5
+dim(X)[2]     # 228
+
+## checking RSS
+fitted_val <- predict(fit_lasso.cv, X, s="lambda.min")
+rsd <- fitted_val - y
+sum(rsd^2)
+```
+
+## attempt as a factor
+```{r}
+model_n <- as.integer(factor(c(data$model)))
+data_fac <- data
+data_fac$model <- model_n
+fit_factor <- lm(log(price)~., data = data_fac)
+plot(fit_factor)
+```
+
+## Compare facotor and dummy variable
+```{r}
+anova(fit_log, fit_factor)
+sum(fit_log$residuals^2)
+```
+
+## gam
+```{r}
+library(mgcv)
+fit_gam <- gam(log(price)~s(mileage)+year+s(tax)+model+transmission+engineSize+s(mpg)+fuelType, data=data)
+plot(fit_gam)
+fit_gam_m <- gam(log(price)~mileage+year+tax+model+transmission+engineSize+s(mpg)+fuelType, data=data)
+sum(fit_gam_m$residuals^2)
+```
+
+## cross-validation
+
+```{r}
+## helper function to see how many prediction intervals captures the true price
+pi_score <- function(fit, test_data, actual_data, level=0.95){
+  ## fit -- the model to be tested
+  ## test_data -- test data
+  ## actual_data -- true values
+  ## level of prediction
+  
+  ## construct prediction intervals
+  pi <- predict(fit, test_data, level=level, interval="prediction")
+
+  count = 0
+for (i in seq(1, nrow(pi))) {
+  low <- pi[i, 2]
+  high <- pi[i, 3]
+  actual <- log(actual_data[i])
+  if(low<=actual && actual <= high){
+    count <- count + 1
+  }
+}
+  score = count/nrow(pi)
+return (score)
+}
+```
+
+```{r, include=FALSE}
+test_data <- do.call("rbind", list(audi_test, bmw_test, ford_test, hyundi_test, merc_test, skoda_test, toyota_test, vauxhall_test, vw_test))
+test_data <- test_data[which(test_data$year!="2060"),]
+
+# the MLR model can't predict price for new types
+test_data <- test_data[which(test_data$model%in%(data$model)), ]
+
+## lasso - just mse, no PI or cI
+## prepare data
+test_lasso <- test_data[c("year", "transmission", "mileage", "engineSize", "price")]
+
+## simplify categories based on lasso's selection
+test_lasso[which(test_lasso$year == "2019"), "year"] <- c("2019")
+test_lasso[which(test_lasso$year != "2019"), "year"] <- c("other")
+test_lasso[which(test_lasso$transmission == "Manual"), "transmission"] <- c("Manual")
+test_lasso[which(test_lasso$transmission != "Manual"), "transmission"] <- c("other")
+lasso <- model.matrix(log(price)~., test_lasso)
+fitted_val <- lasso %*% non_zero 
+lasso_rss <- sum((log(test_lasso$price) - fitted_val)^2)
+
+## log model
+fitted_log <- predict(fit_log, test_data)
+log_rss <- sum((log(test_data$price)- fitted_log)^2)
+pi_log <- predict(fit_log, test_data, level=0.95, interval="prediction")
+score_l <- pi_score(fit_log, test_data, test_data$price)
+# pi_log <- predict(fit_log, test_data, interval="prediction")
+
+## reduced model
+fitted_reduced <- predict(fit_reduced, test_data)
+reduced_rss <- sum((log(test_data$price)- fitted_reduced)^2)
+score_r <- pi_score(fit_reduced, test_data, test_data$price)
+
+## gam
+fitted_gam_m <- predict(fit_gam_m, test_data)
+gam_rss <- sum((log(test_data$price)- fitted_gam_m)^2)
+
+barplot(c(lasso_rss, log_rss, reduced_rss, gam_rss), names.arg=c("Lasso", "log MLR", "reduced MLR", "GAM"), main="predict RSS across all models")
+```
+
+## some plots on test-data
+```{r}
+audi_2019 <- audi_test[audi_test$year=="2019" & audi_test$transmission == "Automatic"& audi_test$model=="A4",]
+audi_2019_d <- audi_2019[audi_2019$fuelType=="Diesel",]
+
+audi_gam <- predict(fit_gam_m, audi_2019_d)
+plot(log(audi_2019_d$price))
+lines(c(seq(1, length(audi_gam))), audi_gam)
+
+audi_log <- predict(fit_log, audi_2019_d, interval = "prediction")
+plot(log(audi_2019_d$price), ylim = c(9.8, 11))
+lines(c(seq(1, nrow(audi_log))), audi_log[,1])
+lines(c(seq(1, nrow(audi_log))), audi_log[,2])
+lines(c(seq(1, nrow(audi_log))), audi_log[,3])
+
+audi_red <- predict(fit_reduced, audi_2019_d, interval = "prediction")
+plot(log(audi_2019_d$price), ylim = c(9.8, 11.2))
+lines(c(seq(1, nrow(audi_red))), audi_red[,1])
+lines(c(seq(1, nrow(audi_red))), audi_red[,2])
+lines(c(seq(1, nrow(audi_red))), audi_red[,3])
+
+```
+
+# range too big?
+```{r}
+real_price <- exp(audi_log)
+mean(real_price[, 3]-real_price[, 2])
+
+real_price_r <- exp(audi_red)
+mean(real_price_r[, 3]-real_price_r[, 2])
+```
